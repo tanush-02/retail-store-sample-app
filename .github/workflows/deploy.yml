@@ -1,0 +1,63 @@
+name: Build and Deploy to ECR
+
+on:
+  push:
+    branches: [ gitops ]
+    paths:
+      - 'src/**'
+  pull_request:
+    branches: [ gitops ]
+    paths:
+      - 'src/**'
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [ui, catalog, cart, orders, checkout]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Check if service directory exists
+      id: check-service
+      run: |
+        if [ -d "src/${{ matrix.service }}" ]; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Build and push Docker image
+      if: steps.check-service.outputs.exists == 'true'
+      run: |
+        cd src/${{ matrix.service }}
+        
+        # Create ECR repository if it doesn't exist
+        aws ecr describe-repositories --repository-names retail-store-${{ matrix.service }} --region ${{ env.AWS_REGION }} || \
+        aws ecr create-repository --repository-name retail-store-${{ matrix.service }} --region ${{ env.AWS_REGION }}
+        
+        # Build and push image
+        docker build -t $ECR_REGISTRY/retail-store-${{ matrix.service }}:${{ github.sha }} .
+        docker push $ECR_REGISTRY/retail-store-${{ matrix.service }}:${{ github.sha }}
+        
+        # Also tag as latest
+        docker tag $ECR_REGISTRY/retail-store-${{ matrix.service }}:${{ github.sha }} $ECR_REGISTRY/retail-store-${{ matrix.service }}:latest
+        docker push $ECR_REGISTRY/retail-store-${{ matrix.service }}:latest
